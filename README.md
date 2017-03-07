@@ -14,7 +14,7 @@ Use the following steps to get started.
 
 1. Clone the repo using `go get`:
 ```bash
-$ go get -u github.com/ahamilton55/fs-test
+$ go get -u github.com/ahamilton55/fs-test/pad
 ```
 
 1. Go to the example directory in the newly cloned repo:
@@ -24,11 +24,11 @@ $ cd ${GOPATH}/src/github.com/ahamilton55/fs-test/example
 
 1. Edit the configuration file example in `.deploy/config.toml` with the following information:
 
-  * S3 Bucket (Updated in both places with the same value)
-  * Public VPC Subnet IDs (comman separated list)
-  * Private VPC Subnet IDs (comman separated list)
-  * VPC ID
-  * Public Key (if you want to login to the instance)
+  * **Bucket** and **BucketName**: S3 bucket name (Updated in both places with the same value)
+  * **PublicSubnetIDs**: Subnet IDs that are public for ELB(comman separated list)
+  * **PrivateSubnetIDs**: Subnet IDs that are private for instances (comman separated list)
+  * **VpcId**: VPC ID where the above subnets are located
+  * **KeyName**: SSH Public Key already uploaded in AWS (if you want to login to the instance)
 
 1. Package the example and upload it to the provided S3 bucket:
 ```bash
