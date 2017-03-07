@@ -1,0 +1,390 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Parameters" : {
+    "BucketName" : {
+      "Type": "String",
+      "Description": "The bucket used for package storage"
+    },
+    "DesiredCapacity": {
+      "Type": "Number",
+      "Default" : "1",
+      "Description": "Number of instances to launch in your ECS cluster."
+    },
+    "Environment" : {
+      "Description" : "Environment the app is running in",
+      "Type" : "String",
+      "Default" : "stage"
+    },
+    "HealthEndpoint" : {
+      "Description" : "Endpoint to use for ELB health checks",
+      "Type" : "String",
+      "Default" : "/index.html"
+    },
+    "KeyName": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Description": "Name of an existing EC2 KeyPair to enable SSH access to the ECS instances."
+    },
+    "InstanceType" : {
+      "Description" : "The EC2 instance type",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : [ "t2.micro", "t2.medium", "t2.large", "c4.large", "c4.xlarge", "c4.2xlarge" ],
+      "ConstraintDescription" : "You can specify only t2.mirco."
+    },
+    "MaxSize": {
+      "Type": "Number",
+      "Default" : "2",
+      "Description": "Maximum number of instances that can be launched in your ECS cluster."
+    },
+    "PrivateSubnetIDs" : {
+      "Description" : "The subnets for instances",
+      "Type": "List<AWS::EC2::Subnet::Id>",
+    },
+    "PublicSubnetIDs" : {
+      "Description" : "The subnets for the load balancer",
+      "Type": "List<AWS::EC2::Subnet::Id>",
+    },
+    "Package" : {
+      "Description": "Package to be used for deployment",
+      "Type": "String"
+    },
+    "SiteName" : {
+      "Description" : "Name of the task to be created",
+      "Type" : "String"
+    },
+    "VpcId": {
+      "Description": "The VPC where all of this is running",
+      "Type": "String",
+    },
+    "VPCNetwork": {
+      "Description": "The VPC super network range",
+      "Type": "String",
+      "Default": "172.31.0.0/16"
+    }
+  },
+
+  "Mappings" : {
+    "AWSRegionToAMI" : {
+      "us-east-1" : { "AMIID" : "ami-0b33d91d" },
+      "us-east-2" : { "AMIID" : "ami-c55673a0" },
+      "us-west-1" : { "AMIID" : "ami-165a0876" },
+      "us-west-2" : { "AMIID" : "ami-f173cc91" }
+    }
+  },
+
+  "Resources" : {
+    "AutoScalingGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "VPCZoneIdentifier" : { "Ref" : "PrivateSubnetIDs" },
+        "Cooldown": "300",
+        "LaunchConfigurationName" : { "Ref" : "LaunchConfig" },
+        "MinSize" : "1",
+        "MaxSize" : { "Ref" : "MaxSize" },
+        "DesiredCapacity" : { "Ref" : "DesiredCapacity" },
+        "Tags" : [
+          {
+            "PropagateAtLaunch": true,
+            "Key" : "Environment",
+            "Value" : { "Ref" : "Environment" }
+          },
+          {
+            "PropagateAtLaunch": true,
+            "Key" : "Name",
+            "Value" : { "Fn::Join": [ "-", [ { "Ref": "Environment" }, { "Ref": "SiteName" } ] ] }
+          }
+        ],
+        "TargetGroupARNs" : [ {"Ref" : "AppLoadBalancerTargetGroup" } ]
+      },
+      "CreationPolicy" : {
+        "ResourceSignal" : {
+          "Timeout" : "PT15M"
+        }
+      },
+      "UpdatePolicy": {
+        "AutoScalingRollingUpdate": {
+          "MinInstancesInService": "1",
+          "MaxBatchSize": "1",
+          "PauseTime" : "PT15M",
+          "WaitOnResourceSignals": "true"
+        }
+      }
+    },
+    "AutoScalingActionsHighCPU": {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "Properties" : {
+        "AdjustmentType": "ChangeInCapacity",
+        "AutoScalingGroupName": { "Ref": "AutoScalingGroup" },
+        "Cooldown": "300",
+        "ScalingAdjustment": 1
+      }
+    },
+    "ASGAlarmHighCPU": {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+          "ActionsEnabled" : True,
+          "AlarmActions" : [ {"Ref": "AutoScalingActionsHighCPU"} ],
+          "AlarmDescription" : "Scale out web service when high CPU usage",
+          "AlarmName" : {"Fn::Join" : ["-", [ {"Ref": "Environment"}, {"Ref": "SiteName"}, "high-cpu" ] ] },
+          "ComparisonOperator" : "GreaterThanThreshold",
+          "Dimensions" : [
+            {
+              "Name": "AutoScalingGroupName",
+              "Value": {"Ref": "AutoScalingGroup"}
+            }
+          ],
+          "EvaluationPeriods" : 1,
+          "MetricName" : "CPUUtilization",
+          "Namespace" : "AWS/EC2",
+          "Period" : 180,
+          "Statistic" : "Average",
+          "Threshold" : "70"
+      }
+    },
+    "AutoScalingActionsLowCPU": {
+      "Type" : "AWS::AutoScaling::ScalingPolicy",
+      "Properties" : {
+        "AdjustmentType": "ChangeInCapacity",
+        "AutoScalingGroupName": { "Ref": "AutoScalingGroup" },
+        "Cooldown": "300",
+        "ScalingAdjustment": -1
+      }
+    },
+    "ASGAlarmLowCPU": {
+      "Type" : "AWS::CloudWatch::Alarm",
+      "Properties" : {
+          "ActionsEnabled" : True,
+          "AlarmActions" : [ {"Ref": "AutoScalingActionsLowCPU"} ],
+          "AlarmDescription" : "Scale in web service when low CPU usage",
+          "AlarmName" : {"Fn::Join" : ["-", [ {"Ref": "Environment"}, {"Ref": "SiteName"}, "low-cpu" ] ] },
+          "ComparisonOperator" : "LessThanOrEqualToThreshold",
+          "Dimensions" : [
+            {
+              "Name": "AutoScalingGroupName",
+              "Value": {"Ref": "AutoScalingGroup"}
+            }
+          ],
+          "EvaluationPeriods" : 1,
+          "MetricName" : "CPUUtilization",
+          "Namespace" : "AWS/EC2",
+          "Period" : 300,
+          "Statistic" : "Average",
+          "Threshold" : "50"
+      }
+    },
+    "LaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "files" : {
+              "/etc/cfn/cfn-hup.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "[main]\n",
+                  "stack=", { "Ref" : "AWS::StackId" }, "\n",
+                  "region=", { "Ref" : "AWS::Region" }, "\n"
+                ]]},
+                "mode"    : "000400",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf" : {
+                "content": { "Fn::Join" : ["", [
+                  "[cfn-auto-reloader-hook]\n",
+                  "triggers=post.update\n",
+                  "path=Resources.ContainerInstances.Metadata.AWS::CloudFormation::Init\n",
+                  "action=/opt/aws/bin/cfn-init -v ",
+                  "         --stack ", { "Ref" : "AWS::StackName" },
+                  "         --resource ContainerInstances ",
+                  "         --region ", { "Ref" : "AWS::Region" }, "\n",
+                  "runas=root\n"
+                ]]}
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "cfn-hup" : { "enabled" : "true", "ensureRunning" : "true", "files" : ["/etc/cfn/cfn-hup.conf", "/etc/cfn/hooks.d/cfn-auto-reloader.conf"] },
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionToAMI", { "Ref" : "AWS::Region" }, "AMIID" ] },
+        "InstanceType"   : { "Ref" : "InstanceType" },
+        "IamInstanceProfile": { "Ref": "EC2InstanceProfile" },
+        "KeyName"        : { "Ref" : "KeyName" },
+        "SecurityGroups" : [ { "Fn::GetAtt" : [ "InstanceSecurityGroup", "GroupId" ] } ],
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+             "#!/bin/bash -xe\n",
+             "yum install -y aws-cfn-bootstrap nginx.x86_64\n",
+
+             "/usr/bin/aws s3 cp ", { "Ref" : "Package" }, " /tmp/site.tgz\n",
+
+             "rm -rf /usr/share/nginx/html/*\n",
+             "/bin/tar -xzvf /tmp/site.tgz --owner=nginx --group=nginx -C /usr/share/nginx/html\n",
+             "/sbin/service nginx restart\n",
+
+             "/opt/aws/bin/cfn-init -v ",
+             "         --stack ", { "Ref" : "AWS::StackName" },
+             "         --resource LaunchConfig ",
+             "         --region ", { "Ref" : "AWS::Region" }, "\n",
+
+             "/opt/aws/bin/cfn-signal -e $? ",
+             "         --stack ", { "Ref" : "AWS::StackName" },
+             "         --resource AutoScalingGroup ",
+             "         --region ", { "Ref" : "AWS::Region" }, "\n"
+        ]]}}
+      }
+    },
+    "EC2Role": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version" : "2012-10-17",
+          "Statement": [ {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": [ "ec2.amazonaws.com" ]
+            },
+            "Action": [ "sts:AssumeRole" ]
+          } ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": { "Fn::Join" : ["-", [ { "Ref" : "Environment" }, { "Ref" : "SiteName"} ] ] },
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListAllMyBuckets",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:ListObjects"
+                  ],
+                  "Resource": { "Fn::Join" : [ "", [ "arn:aws:s3:::", { "Ref" : "BucketName" }, "/*" ] ] }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "EC2InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          { "Ref": "EC2Role" }
+        ]
+      }
+    },
+    "InstanceSecurityGroup": {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Instance security group",
+        "SecurityGroupIngress" : [
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "80",
+            "ToPort" : "80",
+            "SourceSecurityGroupId": {"Ref":"ElbSecurityGroup"}
+          },
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "22",
+            "ToPort" : "22",
+            "CidrIp" : { "Ref": "VPCNetwork" }
+          }
+        ],
+        "Tags" :  [
+          {
+            "Key": "Name",
+            "Value": { "Fn::Join" : [ "-", [ {"Ref":"Environment"}, {"Ref":"SiteName"}, "instances" ] ] }
+          }
+        ],
+        "VpcId" : {"Ref":"VpcId"}
+      }
+    },
+    "ElbSecurityGroup": {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "ELB security group",
+        "SecurityGroupIngress" : [
+          {
+            "IpProtocol" : "tcp",
+            "FromPort" : "80",
+            "ToPort" : "80",
+            "CidrIp" : "0.0.0.0/0"
+          }
+        ],
+        "Tags" :  [
+          {
+            "Key": "Name",
+            "Value": { "Fn::Join" : [ "-", [ {"Ref":"Environment"}, {"Ref":"SiteName"}, "elb" ] ] }
+          }
+        ],
+        "VpcId" : {"Ref":"VpcId"}
+      }
+    },
+    "AppLoadBalancer": {
+      "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties" : {
+        "Name" : { "Ref": "SiteName" },
+        "Scheme" : "internet-facing",
+        "SecurityGroups" : [ { "Ref": "ElbSecurityGroup" } ],
+        "Subnets" : { "Ref": "PublicSubnetIDs" }
+      }
+    },
+    "AppLoadBalancerListenerHTTP": {
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": { "Ref": "AppLoadBalancerTargetGroup" }
+          }
+        ],
+        "LoadBalancerArn" : { "Ref": "AppLoadBalancer" },
+        "Port" : 80,
+        "Protocol" : "HTTP"
+      }
+    },
+    "AppLoadBalancerTargetGroup":{
+      "Type":"AWS::ElasticLoadBalancingV2::TargetGroup",
+      "DependsOn":"AppLoadBalancer",
+      "Properties":{
+        "HealthCheckIntervalSeconds":10,
+        "HealthCheckPath": { "Ref": "HealthEndpoint" },
+        "HealthCheckProtocol":"HTTP",
+        "HealthCheckTimeoutSeconds":5,
+        "HealthyThresholdCount":2,
+        "Name": { "Fn::Join" : [ "-", [ {"Ref":"SiteName"}, "tg"] ] },
+        "Port": 80,
+        "Protocol":"HTTP",
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "15"
+          }
+        ],
+        "UnhealthyThresholdCount":2,
+        "VpcId":{ "Ref":"VpcId" }
+      }
+    }
+  },
+  "Outputs" : {
+    "WebsiteURL": {
+      "Description": "DNS name for the created ALB",
+      "Value": { "Fn::Join" : ["", [ "http://", { "Fn::GetAtt" : ["AppLoadBalancer", "DNSName"] }, "/" ] ] }
+    }
+  }
+}

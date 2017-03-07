@@ -1,0 +1,23 @@
+Service = "example"
+
+PackagerType = "s3tarball"
+PackagerArgs = """
+Bucket = "fs-test-packages"
+"""
+
+DeployerType = "cloudformation"
+DeployerArgs = """
+Template = ".deploy/site.template"
+Capabilities = [ "CAPABILITY_IAM" ]
+
+[Parameters]
+stage = [
+  "BucketName=fs-test-packages",
+  "Environment=stage",
+  "KeyName=dirac",
+  "PrivateSubnetIDs=subnet-35eb4b7c,subnet-a67170fe,subnet-1ce9677b",
+  "PublicSubnetIDs=subnet-8e8473e5,subnet-8f8473e4,subnet-888473e3",
+  "SiteName=example",
+  "VpcId=vpc-898473e2",
+]
+"""
